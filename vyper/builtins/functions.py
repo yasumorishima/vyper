@@ -214,13 +214,14 @@ class Convert(BuiltinFunctionT):
                 value_types = sorted(value_types, key=lambda v: (v.is_signed, v.bits), reverse=True)
             else:
                 # filter out the target type from list of possible types
-                value_types = [i for i in value_types if not target_type.compare_type(i)]
+                value_types = [i for i in value_types if not i.is_equivalent_to(target_type)]
 
         value_type = value_types.pop()
 
         # block conversions between same type
-        if target_type.compare_type(value_type):
-            raise InvalidType(f"Value and target type are both '{target_type}'", node)
+        if value_type.is_subtype_of(target_type):
+            hint = "remove convert()"
+            raise InvalidType(f"Already a '{target_type}' !", node, hint=hint)
 
         return [value_type, TYPE_T(target_type)]
 
@@ -2090,49 +2091,10 @@ class ISqrt(BuiltinFunctionT):
     _inputs = [("d", UINT256_T)]
     _return_type = UINT256_T
 
-    @process_inputs
-    def build_IR(self, expr, args, kwargs, context):
-        # calculate isqrt using the babylonian method
-
-        y, z = "y", "z"
-        arg = args[0]
-        with arg.cache_when_complex("x") as (b1, x):
-            ret = [
-                "seq",
-                [
-                    "if",
-                    ["ge", y, 2 ** (128 + 8)],
-                    ["seq", ["set", y, shr(128, y)], ["set", z, shl(64, z)]],
-                ],
-                [
-                    "if",
-                    ["ge", y, 2 ** (64 + 8)],
-                    ["seq", ["set", y, shr(64, y)], ["set", z, shl(32, z)]],
-                ],
-                [
-                    "if",
-                    ["ge", y, 2 ** (32 + 8)],
-                    ["seq", ["set", y, shr(32, y)], ["set", z, shl(16, z)]],
-                ],
-                [
-                    "if",
-                    ["ge", y, 2 ** (16 + 8)],
-                    ["seq", ["set", y, shr(16, y)], ["set", z, shl(8, z)]],
-                ],
-            ]
-            ret.append(["set", z, ["div", ["mul", z, ["add", y, 2**16]], 2**18]])
-
-            for _ in range(7):
-                ret.append(["set", z, ["div", ["add", ["div", x, z], z], 2]])
-
-            # note: If ``x+1`` is a perfect square, then the Babylonian
-            # algorithm oscillates between floor(sqrt(x)) and ceil(sqrt(x)) in
-            # consecutive iterations. return the floor value always.
-
-            ret.append(["with", "t", ["div", x, z], ["select", ["lt", z, "t"], z, "t"]])
-
-            ret = ["with", y, x, ["with", z, 181, ret]]
-            return b1.resolve(IRnode.from_list(ret, typ=UINT256_T))
+    def fetch_call_return(self, node):
+        message = "The `isqrt` builtin was removed. Instead import module "
+        message += "`math` and use `math.isqrt()`"
+        raise UnimplementedException(message, node)
 
 
 class Empty(TypenameFoldedFunctionT):
@@ -2525,7 +2487,7 @@ class Epsilon(TypenameFoldedFunctionT):
         self._validate_arg_types(node)
         input_type = type_from_annotation(node.args[0])
 
-        if not input_type.compare_type(DecimalT()):
+        if not input_type.is_subtype_of(DecimalT()):
             raise InvalidType(f"Expected decimal type but got {input_type} instead", node)
 
         return vy_ast.Decimal.from_node(node, value=input_type.epsilon)
